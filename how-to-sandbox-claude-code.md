@@ -16,6 +16,43 @@ Here's exactly how I did it, step by step.
 
 ---
 
+## Native Mode vs. Docker Sandbox Mode
+
+There are two ways to run Claude Code. Understanding the difference matters before you decide whether this guide is for you.
+
+**Native mode** is the default. Claude Code runs directly on your machine as your user account. It can read and modify any file you have access to — your code, your documents, your downloads, everything. This is fine if you trust the tool completely, but it violates the principle of least privilege.
+
+**Docker sandbox mode** is what this guide sets up. Claude Code runs inside a container that can only see files you explicitly mount into it. Everything else on your machine is invisible — not hidden, not restricted, but *nonexistent* from the container's perspective.
+
+Here's how the file access differs:
+
+```
+  Your Computer (Host)                   Docker Container
+ ┌─────────────────────┐               ┌──────────────────┐
+ │                     │               │                  │
+ │ ~/Desktop/          │  (blocked)    │                  │
+ │ ~/Documents/        │  (blocked)    │                  │
+ │ ~/Photos/           │  (blocked)    │                  │
+ │                     │               │                  │
+ │ ~/claude_sandbox/ ─────── rw ──────>│ /workspace/      │
+ │   ├── Dockerfile    │               │   ├── Dockerfile │
+ │   ├── my-project/   │               │   ├── my-project/│
+ │   └── ...           │               │   └── ...        │
+ │                     │               │                  │
+ │ ~/.ssh/ ───────────────── ro ──────>│ /root/.ssh/      │
+ │                     │               │                  │
+ └─────────────────────┘               │ Claude Code runs │
+                                       │ here — can only  │
+                                       │ see /workspace   │
+                                       └──────────────────┘
+
+ rw = read-write    ro = read-only    (blocked) = not mounted, does not exist
+```
+
+The `claude_sandbox` folder on your host is the **only** directory that appears inside the container. It shows up as `/workspace`. Your SSH keys are also mounted, but read-only — Claude can use them to push and pull code, but cannot modify or exfiltrate them. Everything else on your machine simply does not exist from the container's point of view.
+
+---
+
 ## What You'll Need Before Starting
 
 - **A Mac** (this was built on macOS, but it works on Linux too)
@@ -89,7 +126,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 EXPOSE 3000
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["claude"]
+
+# Keep the container running so you can exec into it with:
+#   docker compose exec claude-sandbox claude
+CMD ["sleep", "infinity"]
 ```
 
 **What this does in plain English:**
@@ -99,12 +139,13 @@ CMD ["claude"]
 - Installs the GitHub CLI so Claude can interact with GitHub
 - Creates a `/workspace` folder inside the container — this is where your files will appear
 - Sets up SSH configuration so Git push/pull works with GitHub
+- Uses `sleep infinity` as the default command to keep the container running in the background — you start Claude by exec-ing into the container (explained in Step 7)
 
 ---
 
 ## Step 3: Create the Entrypoint Script (What Runs When the Container Starts)
 
-I created a file called `entrypoint.sh`. This runs every time the container boots up:
+I created a file called `entrypoint.sh`. This runs once when the container boots up:
 
 ```bash
 #!/bin/bash
@@ -123,8 +164,9 @@ if [ -d /root/.ssh ] && [ "$(ls -A /root/.ssh 2>/dev/null)" ]; then
         find /tmp/.ssh-copy -type f -name "id_*" ! -name "*.pub" -exec chmod 600 {} \; 2>/dev/null || true
         find /tmp/.ssh-copy -type f -name "*.pub" -exec chmod 644 {} \; 2>/dev/null || true
         find /tmp/.ssh-copy -type f -name "config" -exec chmod 600 {} \; 2>/dev/null || true
-        # Point git/ssh to the writable copy
-        export GIT_SSH_COMMAND="ssh -i /tmp/.ssh-copy/id_ed25519 -o UserKnownHostsFile=/tmp/.ssh-copy/known_hosts -o StrictHostKeyChecking=accept-new"
+        # Configure git to use the writable key copy.
+        # Uses git config (not an env var) so it persists for exec'd sessions.
+        git config --global core.sshCommand "ssh -i /tmp/.ssh-copy/id_ed25519 -o UserKnownHostsFile=/tmp/.ssh-copy/known_hosts -o StrictHostKeyChecking=accept-new"
         echo "[ssh] Keys loaded from read-only mount"
     fi
 fi
@@ -147,18 +189,18 @@ done
 echo ""
 echo "[ready] Workspace: /workspace"
 echo "[ready] Port 3000 mapped for MCP HTTP server"
-echo "[ready] Run 'claude' to start Claude Code"
+echo "[ready] Start Claude with: docker compose exec claude-sandbox claude"
 echo ""
 
-# Execute whatever command was passed (default: claude)
+# Execute the container's CMD (default: sleep infinity to keep container alive)
 exec "$@"
 ```
 
 **What this does in plain English:**
 - Prints a welcome message so you know the container started
-- Handles a tricky SSH permissions issue: your SSH keys are mounted read-only (for safety), but SSH is picky about file permissions. So the script copies them to a temporary location with the right permissions.
+- Handles a tricky SSH permissions issue: your SSH keys are mounted read-only (for safety), but SSH is picky about file permissions. So the script copies them to a temporary location with the right permissions, then configures Git to use the copies. Because this is stored in `git config` (not an environment variable), it remains available for any process you later exec into the container — including Claude Code sessions.
 - If any of your projects have Node.js dependencies (`node_modules`), it rebuilds them for Linux, since your Mac's versions won't work inside the container
-- Launches whatever command you tell it to (by default, `claude`)
+- Runs the container's default command (`sleep infinity`), which keeps the container alive in the background
 
 ---
 
@@ -173,8 +215,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: claude-sandbox
-    stdin_open: true    # Required for interactive Claude Code sessions
-    tty: true           # Required for terminal colors and input
+    stdin_open: true    # Allocate stdin for interactive exec sessions
+    tty: true           # Allocate a TTY for terminal colors and input
 
     # Load secrets from .env file
     env_file:
@@ -209,7 +251,7 @@ volumes:
 
 This is the most important file for understanding the sandbox. Here's what each piece does:
 
-- **`stdin_open` and `tty`**: These let you actually type and interact with Claude inside the container. Without them, it would just exit immediately.
+- **`stdin_open` and `tty`**: These allocate a terminal so that interactive sessions (via `docker compose exec`) work properly with Claude Code's input and colored output.
 - **`env_file: .env`**: Loads your API key from a separate file (so it's not hardcoded anywhere).
 - **`volumes`** — this is where the sandboxing happens:
   - `./:/workspace` — Mounts your `claude_sandbox` folder as `/workspace` inside the container. **This is the only part of your computer Claude can see.** Your home folder, Desktop, Documents, photos, everything else — completely invisible.
@@ -313,19 +355,136 @@ And a `.dockerignore` to keep secrets out of the Docker image itself:
 
 ## Step 7: Build and Run
 
-With all the files in place, building and launching the sandbox is two commands:
+With all the files in place, building and launching the sandbox is straightforward.
+
+### First time: build the image and start the container
 
 ```bash
-# Build the container (only needed the first time, or after changing the Dockerfile)
+# Build the container image (only needed the first time, or after changing the Dockerfile)
 docker compose build
 
-# Start the container and drop into an interactive session
-docker compose run --rm claude-sandbox
+# Start the container in the background
+docker compose up -d
 ```
 
-The `--rm` flag means the container is automatically cleaned up when you exit. You'll see the welcome message, and then Claude Code starts up. You're now working inside the sandbox.
+The container starts, runs the entrypoint script (SSH setup, node_modules rebuild), then stays alive in the background via `sleep infinity`. You can verify it's running with `docker compose ps`.
 
-To use it again later, you just run the same `docker compose run --rm claude-sandbox` command. No need to rebuild unless you change the Dockerfile.
+### Start a Claude Code session
+
+```bash
+docker compose exec claude-sandbox claude
+```
+
+This opens an interactive Claude Code session inside the running container. When you're done, just exit Claude normally (`/exit` or Ctrl+C). The container keeps running in the background, ready for your next session.
+
+### Day-to-day usage
+
+You only need two commands for daily use:
+
+```bash
+# If the container isn't already running:
+docker compose up -d
+
+# Start Claude:
+docker compose exec claude-sandbox claude
+```
+
+### Optional: create an alias
+
+To save typing, add a function to your `~/.bashrc` or `~/.zshrc`:
+
+```bash
+claude_docker() {
+    docker compose -f ~/claude_sandbox/docker-compose.yml up -d && \
+    docker compose -f ~/claude_sandbox/docker-compose.yml exec claude-sandbox claude "$@"
+}
+```
+
+This starts the container if it isn't already running (`up -d` is a no-op if it's already up), then opens a Claude session. You can launch a sandbox session from anywhere with just `claude_docker`.
+
+### Stopping the container
+
+When you want to shut the sandbox down completely:
+
+```bash
+docker compose down
+```
+
+This stops the container but preserves your workspace files and the `claude-config` volume (so authentication tokens persist). To start again later, just run `docker compose up -d`.
+
+### Why not `docker compose run --rm`?
+
+Older versions of this guide used `docker compose run --rm claude-sandbox` to start sessions. This creates an **ephemeral container** — a fresh, temporary container that is destroyed when you exit. While it can work, it introduces several issues:
+
+1. **No stable container identity.** `run --rm` creates a container with a random name each time. Commands like `docker inspect claude-sandbox` target the named service container and won't find the ephemeral one. This silently breaks the entire verification workflow in Step 8.
+2. **Writable-layer state doesn't persist.** Named volumes (like `claude-config:/root/.claude`) *do* persist across `run --rm` sessions — so authentication tokens stored in that volume are retained. However, any state written to the container's own writable layer (such as `git config --global core.sshCommand` set by the entrypoint) is lost when the container is removed. This means SSH and Git configuration must be rebuilt from scratch every session.
+3. **Redundant work every session.** The entrypoint script (SSH key copy, node_modules rebuild) runs from scratch every time you start a session, adding unnecessary startup delay.
+
+The persistent model (`up -d` + `exec`) avoids all three issues. The container starts once, stays running, and every `exec` session shares the same writable layer, named volumes, and configuration state.
+
+---
+
+## Common Mistakes
+
+### Don't override the `claude` command with a shell function
+
+It's tempting to add something like this to your shell profile:
+
+```bash
+# DON'T DO THIS
+claude() {
+    docker compose exec claude-sandbox claude "$@"
+}
+```
+
+This shadows the real `claude` binary. If you ever install Claude Code natively (or already have it installed), the shell function intercepts the command and you'll have no way to run native Claude Code without removing or bypassing the function. Scripts and tools that call `claude` will also get the Docker version unexpectedly.
+
+### Use `claude_docker` instead
+
+A distinct name eliminates ambiguity:
+
+```bash
+# DO THIS
+claude_docker() {
+    docker compose -f ~/claude_sandbox/docker-compose.yml up -d && \
+    docker compose -f ~/claude_sandbox/docker-compose.yml exec claude-sandbox claude "$@"
+}
+```
+
+Now `claude` always means native Claude Code, and `claude_docker` always means the sandboxed version. You always know which mode you're in.
+
+### Docker Compose must be run from the sandbox directory
+
+`docker compose` looks for `docker-compose.yml` in the current working directory. If you run `docker compose up -d` from your home directory or a project folder, it will either fail (no compose file found) or start a different compose project entirely.
+
+Either `cd` into the sandbox directory first:
+
+```bash
+cd ~/claude_sandbox
+docker compose up -d
+```
+
+Or use the `-f` flag to specify the compose file explicitly:
+
+```bash
+docker compose -f ~/claude_sandbox/docker-compose.yml up -d
+```
+
+The `claude_docker` function shown above already handles this for `exec` sessions, but you'll still need to be in the right directory (or use `-f`) when running `up`, `down`, `build`, or `ps`.
+
+### Don't use `sudo` with Docker commands
+
+On **macOS**, Docker Desktop runs as your user and `sudo` should never be necessary. If you find yourself needing `sudo` for Docker commands on a Mac, something is misconfigured — reinstall Docker Desktop.
+
+On **Linux**, if Docker requires `sudo`, the correct fix is to add your user to the `docker` group:
+
+```bash
+sudo usermod -aG docker $USER
+```
+
+Then log out and back in.
+
+On either platform, running `sudo docker compose ...` creates files owned by root, can introduce unexpected permission issues inside the container, and undermines the isolation model by running the Docker client as the superuser.
 
 ---
 
@@ -339,6 +498,8 @@ So I brought in a second LLM — ChatGPT — and treated it as an independent re
 
 Here's the exact process I used so anyone can repeat it.
 
+**Important:** All verification commands below assume the container is already running via `docker compose up -d`. If it's not running, start it first.
+
 ### Step 8.1: Create a Canary File Outside the Sandbox
 
 On my Mac, I created a file on my Desktop — somewhere that should absolutely be invisible to the container:
@@ -351,10 +512,10 @@ If the container could ever see this file, the sandbox would be broken.
 
 ### Step 8.2: Run a Full Filesystem Check Inside the Container
 
-Then I ran this test inside the sandbox container:
+Then I ran this test inside the running sandbox container:
 
 ```bash
-docker compose run --rm claude-sandbox bash -c '
+docker compose exec claude-sandbox bash -c '
   echo "=== SANDBOX ESCAPE TEST ==="
   echo ""
   echo "Mounted filesystems:"
@@ -363,15 +524,15 @@ docker compose run --rm claude-sandbox bash -c '
   echo "Searching for canary file:"
   find / -name "CLAUDE_CANARY_DO_NOT_READ.txt" 2>/dev/null
   echo ""
-  echo "Direct access test:"
-  cat /Users/$(whoami)/Desktop/CLAUDE_CANARY_DO_NOT_READ.txt 2>&1
+  echo "Direct access test (path traversal from workspace):"
+  cat /workspace/../Desktop/CLAUDE_CANARY_DO_NOT_READ.txt 2>&1
 '
 ```
 
 **What this does in plain English:**
 - Prints every mounted filesystem inside the container
 - Searches the entire container for the canary file
-- Attempts to directly read it from the expected macOS path
+- Attempts to read the canary by traversing up from `/workspace` — this should fail because `/workspace/..` resolves to the container's root filesystem, not your host machine. The host's `~/Desktop` simply doesn't exist inside the container.
 
 If the sandbox were leaking access to my home directory, this test would expose it.
 
@@ -379,10 +540,9 @@ In my case, nothing was found. The path didn't even exist inside the container.
 
 ### Step 8.3: Verify the Container Is Not Running in Privileged Mode
 
-Filesystem isolation only means something if the container isn't running with elevated kernel permissions. After exiting the container, I ran this from my normal Mac terminal:
+Filesystem isolation only means something if the container isn't running with elevated kernel permissions. With the container still running, I ran this from my normal Mac terminal:
 
 ```bash
-docker compose up -d
 docker inspect claude-sandbox --format '{{json .HostConfig.Privileged}}'
 ```
 
@@ -429,13 +589,14 @@ Instead of trusting a narrative, I verified behavior. That's the difference betw
 
 If you want to confirm your own sandbox is properly isolated, here's the full validation flow:
 
-1. Create a canary file outside the sandbox.
-2. Search for it from inside the container.
-3. Attempt to read it directly.
-4. Inspect `/proc/mounts`.
-5. Confirm `Privileged` is `false`.
-6. Inspect `HostConfig.Binds`.
-7. Confirm `/var/run/docker.sock` is not mounted.
+1. Start the container with `docker compose up -d`.
+2. Create a canary file outside the sandbox.
+3. Search for it from inside the container using `docker compose exec`.
+4. Attempt to read it directly.
+5. Inspect `/proc/mounts`.
+6. Confirm `Privileged` is `false`.
+7. Inspect `HostConfig.Binds`.
+8. Confirm `/var/run/docker.sock` is not mounted.
 
 If all of those checks pass, you have strong evidence that:
 - The container cannot see your local filesystem.
@@ -481,9 +642,11 @@ Even inside this locked-down environment, Claude has to ask before running shell
 
 The 4GB memory and 2 CPU core limits mean that even if something goes haywire — an infinite loop, a massive build — it can't take down your whole machine. The container hits its ceiling and stops.
 
-### Nothing persists unless you want it to
+### The container stays ready between sessions
 
-The `--rm` flag means each session starts clean. The only things that persist are your workspace files (which you can see and control) and Claude's configuration (stored in a Docker volume, separate from your files).
+The persistent container model means you start the container once with `docker compose up -d`, and it stays running in the background. Each `docker compose exec` session connects to the same container, sharing the same filesystem state, authentication tokens, and SSH configuration. When you exit Claude, the container keeps running — ready for your next session instantly. Your workspace files persist on your host (they're mounted in), and Claude's configuration persists in the `claude-config` Docker volume.
+
+To fully shut down the container, use `docker compose down`. To start it again later, use `docker compose up -d`.
 
 ### Third-party verified
 

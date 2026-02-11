@@ -43,6 +43,12 @@ Use plain language. Be direct. If something is wrong, say so clearly.
 
 Before pasting the outputs below, run these commands on your machine and paste the results in place of each `[PASTE OUTPUT]` placeholder.
 
+**Important:** All test commands that run inside the container use `docker compose exec`, which executes commands in the already-running service container (started with `docker compose up -d`). Make sure the container is running before you begin. If it's not, start it with:
+
+```bash
+docker compose up -d
+```
+
 ### Test 1: Canary file search
 
 I created a test file outside the sandbox that the container should never be able to see:
@@ -51,10 +57,10 @@ I created a test file outside the sandbox that the container should never be abl
 echo "THIS SHOULD NEVER BE VISIBLE" > ~/Desktop/CLAUDE_CANARY_DO_NOT_READ.txt
 ```
 
-Then I searched for it from inside the container:
+Then I searched for it from inside the running container:
 
 ```bash
-docker compose run --rm claude-sandbox bash -c '
+docker compose exec claude-sandbox bash -c '
   echo "=== SANDBOX ESCAPE TEST ==="
   echo ""
   echo "Mounted filesystems:"
@@ -63,8 +69,8 @@ docker compose run --rm claude-sandbox bash -c '
   echo "Searching for canary file:"
   find / -name "CLAUDE_CANARY_DO_NOT_READ.txt" 2>/dev/null
   echo ""
-  echo "Direct access test:"
-  cat ~/Desktop/CLAUDE_CANARY_DO_NOT_READ.txt 2>&1
+  echo "Direct access test (path traversal from workspace):"
+  cat /workspace/../Desktop/CLAUDE_CANARY_DO_NOT_READ.txt 2>&1
 '
 ```
 
@@ -76,8 +82,9 @@ docker compose run --rm claude-sandbox bash -c '
 
 ### Test 2: Privileged mode check
 
+With the container running (via `docker compose up -d`):
+
 ```bash
-docker compose up -d
 docker inspect claude-sandbox --format '{{json .HostConfig.Privileged}}'
 ```
 
