@@ -4,8 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: claude-sandbox
-    stdin_open: true    # Required for interactive Claude Code sessions
-    tty: true           # Required for terminal colors and input
+    stdin_open: true    # Allocate stdin for interactive exec sessions
+    tty: true           # Allocate a TTY for terminal colors and input
 
     # Load secrets from .env file
     env_file:
@@ -25,23 +25,12 @@ services:
       # Persist Claude Code config between container restarts
       - claude-config:/root/.claude
 
-    # Network: only allow outbound to necessary services
-    # Uncomment the network section below for stricter isolation
-    # networks:
-    #   - sandbox-net
-
-    # Resource limits (optional, prevents runaway processes)
+    # Resource limits (prevents runaway processes)
     deploy:
       resources:
         limits:
           memory: 4G
           cpus: "2.0"
 
-# Persist Claude Code configuration across restarts
 volumes:
   claude-config:
-
-# Uncomment for network isolation (advanced)
-# networks:
-#   sandbox-net:
-#     driver: bridge
