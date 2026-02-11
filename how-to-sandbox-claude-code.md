@@ -10,6 +10,10 @@ So I set up a **Docker sandbox** — a sealed-off container that Claude Code run
 
 Here's exactly how I did it, step by step.
 
+> **Want to skip the reading and just do it?** This repo includes two companion prompt templates:
+> - [**sandbox-setup-prompt.md**](sandbox-setup-prompt.md) — Paste this into Claude and it will walk you through the entire setup interactively.
+> - [**sandbox-verification-prompt.md**](sandbox-verification-prompt.md) — Paste this into a *different* LLM (like ChatGPT) to get an independent, unbiased verification that the sandbox is actually secure.
+
 ---
 
 ## What You'll Need Before Starting
@@ -513,3 +517,12 @@ claude_sandbox/
 This entire setup took about an hour to put together and test. Once it's running, the day-to-day experience is almost identical to running Claude Code directly — you just launch it with a Docker command instead. The small inconvenience of running inside a container is, for me, completely worth the peace of mind.
 
 Claude Code is a remarkable tool. But remarkable tools deserve thoughtful boundaries. This sandbox gives Claude everything it needs to do great work, and nothing it doesn't.
+
+---
+
+## Companion Resources
+
+This repo includes two prompt templates to make the process easier to repeat and verify:
+
+- [**sandbox-setup-prompt.md**](sandbox-setup-prompt.md) — A copy-paste prompt for Claude that guides you through building the entire sandbox interactively. Optimized to minimize token usage on your account.
+- [**sandbox-verification-prompt.md**](sandbox-verification-prompt.md) — A copy-paste prompt for a non-Claude LLM (ChatGPT, Gemini, etc.) that independently reviews your configuration files and diagnostic test results to verify the sandbox is properly isolated. Because you shouldn't trust one AI to grade its own work.
