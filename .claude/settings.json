@@ -1,0 +1,20 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": false
+  },
+  "permissions": {
+    "deny": [
+      "Read(../)",
+      "Edit(../)",
+      "Grep(../)",
+      "Glob(../)"
+    ],
+    "allow": [
+      "Read(./**)",
+      "Edit(./**)",
+      "Grep(./**)",
+      "Glob(./**)"
+    ]
+  }
+}

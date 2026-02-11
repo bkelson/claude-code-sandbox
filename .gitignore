@@ -1,0 +1,15 @@
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# macOS metadata
+.DS_Store
+
+# Personal project folders (not part of the sandbox guide)
+SpeechTest/
+ai-collab/
+claude-chatgpt-bridge/
+german-article-game/
+lean_process/
+stanford/

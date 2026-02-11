@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(node:*)",
+      "Bash(curl:*)"
+    ]
+  }
+}
