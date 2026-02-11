@@ -4,63 +4,36 @@ Copy and paste everything below the line into a new Claude conversation to be gu
 
 ---
 
-I want you to help me set up a Docker sandbox for Claude Code so that when Claude runs, it can only access files inside a single folder on my computer — and nothing else.
+Help me set up a Docker sandbox for Claude Code so it can only access files inside a single folder on my computer — nothing else.
 
-Walk me through this step by step, one step at a time. Wait for me to confirm each step is done before moving to the next one. If I run into errors, help me troubleshoot before continuing.
+Use plain language. Assume I'm comfortable with the terminal but not a Docker expert. Show complete file contents — no placeholders. Proactively warn me about things that could go wrong.
 
-Here is exactly what I need you to help me build:
+## Phase 1: Prerequisites and file creation (give me all of this in a single response)
 
-## What we're building
+First, tell me what I need before starting (Docker Desktop, Anthropic API key, where to get them).
 
-A Docker container that runs Claude Code in isolation. The container should:
+Then give me the complete contents of every file I need to create inside a new `claude_sandbox` folder. Explain briefly what each file does as you go. The files are:
 
-- Only have access to one folder on my computer (the sandbox folder)
-- Mount my SSH keys as read-only so Git push/pull still works
-- Have Claude Code's built-in permissions configured to deny access outside the workspace
-- Have resource limits (4GB RAM, 2 CPUs) to prevent runaway processes
-- Persist Claude Code configuration between restarts using a Docker volume
-- Require my approval before Claude runs any shell command
+1. **Dockerfile** — Base image `node:20-bookworm`. Install Claude Code via npm, Git, GitHub CLI. Configure SSH.
+2. **entrypoint.sh** — Copy read-only SSH keys to a writable temp location (fixes macOS permission issues), rebuild node_modules for Linux, print a ready message, then exec the passed command.
+3. **docker-compose.yml** — This is the core sandboxing file. Mount ONLY the sandbox folder as `/workspace`. Mount `~/.ssh` read-only. Use a named volume for Claude config persistence. Enable `stdin_open` and `tty`. Load env vars from `.env`. Set resource limits (4GB RAM, 2 CPUs).
+4. **.claude/settings.json** — Enable sandbox mode. Set `autoAllowBashIfSandboxed: false`. Deny `Read`, `Edit`, `Grep`, `Glob` on `../`. Allow them on `./**`.
+5. **.claude/settings.local.json** — Pre-approve `WebSearch`, `Bash(node:*)`, `Bash(curl:*)`.
+6. **.env** (with placeholder API key), **.env.example**, **.gitignore**, **.dockerignore** — Keep secrets out of Git and Docker images.
 
-## The steps I need you to guide me through
+End Phase 1 by showing me the expected folder structure and asking me to confirm all files are created.
 
-1. **Prerequisites check** — Confirm I have Docker Desktop installed and an Anthropic API key. If I don't, tell me where to get them.
+## Phase 2: Build, run, and verify (walk me through this interactively)
 
-2. **Create the sandbox folder** — Have me create a single folder that will be Claude's entire world. Explain that anything outside this folder will be invisible to Claude.
+Once I confirm the files are in place, guide me through:
 
-3. **Create the Dockerfile** — Walk me through creating a Dockerfile that installs Node.js, Claude Code (via npm), Git, GitHub CLI, and configures SSH. Use `node:20-bookworm` as the base image. Include an entrypoint script.
-
-4. **Create the entrypoint script** (`entrypoint.sh`) — This should handle copying read-only SSH keys to a writable temp location (fixing macOS permission issues), rebuilding any node_modules for Linux, and printing a ready message.
-
-5. **Create docker-compose.yml** — This is the critical sandboxing file. It should:
-   - Mount only the sandbox folder as `/workspace`
-   - Mount `~/.ssh` as read-only
-   - Use a named Docker volume for Claude config persistence
-   - Set `stdin_open: true` and `tty: true` for interactive sessions
-   - Load environment variables from a `.env` file
-   - Set memory and CPU limits
-
-6. **Create Claude Code permission rules** — Create `.claude/settings.json` inside the sandbox folder with:
-   - Sandbox mode enabled
-   - `autoAllowBashIfSandboxed` set to false
-   - Deny rules for `Read`, `Edit`, `Grep`, `Glob` on `../` (parent directory)
-   - Allow rules for `Read`, `Edit`, `Grep`, `Glob` on `./**` (workspace and below)
-   - A separate `.claude/settings.local.json` that pre-approves `WebSearch`, `Bash(node:*)`, and `Bash(curl:*)`
-
-7. **Set up the API key** — Have me create a `.env` file with my Anthropic API key, plus a `.gitignore` and `.dockerignore` to make sure secrets never get committed or baked into the Docker image.
-
-8. **Build and run** — Walk me through `docker compose build` and `docker compose run --rm claude-sandbox`. Explain what the `--rm` flag does.
-
-9. **Verify the sandbox** — After it's running, guide me through these verification tests:
-   - Create a canary file on my Desktop and try to find it from inside the container
-   - Check that the container is not running in privileged mode (`docker inspect` for `HostConfig.Privileged`)
-   - Confirm exactly what host paths are mounted (`docker inspect` for `HostConfig.Binds`)
+1. `docker compose build` and `docker compose run --rm claude-sandbox`
+2. Verification tests, one at a time — wait for my results before proceeding:
+   - Create a canary file on my Desktop, search for it from inside the container
+   - `docker inspect` to confirm `Privileged` is `false`
+   - `docker inspect` to confirm only expected host paths are in `HostConfig.Binds`
    - Confirm `/var/run/docker.sock` is NOT mounted
 
-## Important guidelines for you
+After verification passes, give me a short summary of what protections are in place and why I can be confident Claude's access is contained.
 
-- Explain everything in plain, simple language. Assume I'm comfortable with the terminal but not an expert in Docker.
-- Show me the complete file contents for every file I need to create. Don't skip anything or use placeholders like "add your config here."
-- If something could go wrong at a given step (like Docker not running, or SSH keys not existing), proactively tell me what to check.
-- After all steps are done, give me a summary of what protections are in place and why I can be confident that Claude's access is contained.
-
-Let's start with Step 1.
+Let's start.
